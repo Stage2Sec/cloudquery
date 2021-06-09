@@ -134,7 +134,9 @@ func (c Client) RunPolicy(ctx context.Context, args []string, subPath, outputPat
 		ui.ColorizedOutput(ui.ColorError, "❌ Failed to run policy: %s.\n\n", err.Error())
 		return err
 	}
-	ui.ColorizedOutput(ui.ColorProgress, "Finished policy run...\n\n")
+	if outputPath != "-" {
+		ui.ColorizedOutput(ui.ColorProgress, "Finished policy run...\n\n")
+	}
 	return nil
 }
 
