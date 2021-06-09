@@ -101,7 +101,9 @@ func (c Client) ExecutePolicy(ctx context.Context, policyPath string, output str
 	if err != nil {
 		return err
 	}
-	ui.ColorizedOutput(ui.ColorProgress, "Policy Executed successfully\n")
+	if output != "-" {
+		ui.ColorizedOutput(ui.ColorProgress, "Policy Executed successfully\n")
+	}
 	return nil
 }
 

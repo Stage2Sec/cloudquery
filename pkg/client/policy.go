@@ -66,21 +66,31 @@ func executePolicyQuery(ctx context.Context, conn *pgxpool.Conn, query config.Po
 }
 
 func createPolicyOutput(outputPath string, result *PolicyExecutionResult) error {
-	fs := afero.NewOsFs()
-	f, err := fs.OpenFile(outputPath, os.O_RDWR|os.O_CREATE, 0644)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		_ = f.Close()
-	}()
+	if outputPath == "-" {
+		data, err := json.Marshal(&result)
+		if err != nil {
+			return err
+		}
+		fmt.Println(string(data))
+		return nil
+	} else {
+		fs := afero.NewOsFs()
+		f, err := fs.OpenFile(outputPath, os.O_RDWR|os.O_CREATE, 0644)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			_ = f.Close()
+		}()
 
-	data, err := json.Marshal(&result)
-	if err != nil {
-		return err
+		data, err := json.Marshal(&result)
+		if err != nil {
+			return err
+		}
+		if _, err := f.Write(data); err != nil {
+			return err
+		}
+		return nil
 	}
-	if _, err := f.Write(data); err != nil {
-		return err
-	}
-	return nil
+
 }
