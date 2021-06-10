@@ -4,7 +4,7 @@ GOCLEAN=$(GOCMD) clean
 GOTEST=$(GOCMD) test
 GOGET=$(GOCMD) get
 BUILD_DIR=build
-BINARY_NAME=cloud_enumeration
+BINARY_NAME=cloudquery
 BINARY_UNIX=$(BINARY_NAME)_unix
 
 all: clean build build-linux
