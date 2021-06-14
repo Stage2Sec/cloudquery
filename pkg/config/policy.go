@@ -14,4 +14,5 @@ type PolicyQueries struct {
 	Name   string
 	Invert bool
 	Query  string
+	Risk   map[string]interface{}
 }

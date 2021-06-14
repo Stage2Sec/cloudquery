@@ -15,10 +15,11 @@ import (
 )
 
 type PolicyResult struct {
-	Name    string          `json:"name"`
-	Columns []string        `json:"result_headers"`
-	Data    [][]interface{} `json:"result_rows"`
-	Passed  bool            `json:"check_passed"`
+	Name    string                 `json:"name"`
+	Columns []string               `json:"result_headers"`
+	Data    [][]interface{}        `json:"result_rows"`
+	Passed  bool                   `json:"check_passed"`
+	Risk    map[string]interface{} `json:"risk"`
 }
 
 func createViews(ctx context.Context, conn *pgxpool.Conn, views []config.PolicyView) error {
@@ -47,11 +48,11 @@ func executePolicyQuery(ctx context.Context, conn *pgxpool.Conn, query config.Po
 		Columns: make([]string, 0),
 		Data:    make([][]interface{}, 0),
 		Passed:  false,
+		Risk:    map[string]interface{}{},
 	}
 	for _, fd := range data.FieldDescriptions() {
 		result.Columns = append(result.Columns, string(fd.Name))
 	}
-
 	for data.Next() {
 		values, err := data.Values()
 		if err != nil {
@@ -61,6 +62,9 @@ func executePolicyQuery(ctx context.Context, conn *pgxpool.Conn, query config.Po
 	}
 	if (len(result.Data) == 0 && !query.Invert) || (query.Invert && len(result.Data) > 0) {
 		result.Passed = true
+	}
+	for k, v := range query.Risk {
+		result.Risk[k] = v
 	}
 	return result, nil
 }
