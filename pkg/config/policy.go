@@ -35,4 +35,5 @@ type Query struct {
 	Description  string `hcl:"description,optional"`
 	ExpectOutput bool   `hcl:"expect_output,optional"`
 	Query        string `hcl:"query"`
+	Risk         map[string]interface{}
 }
