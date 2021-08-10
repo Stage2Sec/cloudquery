@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -350,7 +351,7 @@ func (c Client) RunPolicy(ctx context.Context, req PolicyRunRequest) error {
 	}
 
 	// Store output in file if requested
-	if req.OutputPath != "" {
+	if req.OutputPath != "" && req.OutputPath != "-" {
 		fs := afero.NewOsFs()
 		f, err := fs.OpenFile(req.OutputPath, os.O_RDWR|os.O_CREATE, 0644)
 		if err != nil {
@@ -367,6 +368,14 @@ func (c Client) RunPolicy(ctx context.Context, req PolicyRunRequest) error {
 		if _, err := f.Write(data); err != nil {
 			return err
 		}
+	}
+
+	if req.OutputPath == "-" {
+		data, err := json.Marshal(&output)
+		if err != nil {
+			return err
+		}
+		fmt.Println(string(data))
 	}
 	return nil
 }
