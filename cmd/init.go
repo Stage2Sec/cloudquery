@@ -19,11 +19,20 @@ import (
 	"github.com/spf13/viper"
 )
 
+const initHelpMsg = "Generate initial config.hcl for fetch command"
+
 var (
 	initCmd = &cobra.Command{
 		Use:   "init [choose one or more providers (aws,gcp,azure,okta,...)]",
-		Short: "Generate initial config.hcl for fetch command",
-		Args:  cobra.MinimumNArgs(1),
+		Short: initHelpMsg,
+		Long:  initHelpMsg,
+		Example: `
+  # Downloads aws provider and generates config.hcl for aws provider
+  cloudquery init aws
+	
+  # Downloads aws,gcp providers and generates one config.hcl with both providers
+  cloudquery init aws gcp`,
+		Args: cobra.MinimumNArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
 			Initialize(args)
 		},
@@ -50,10 +59,11 @@ func Initialize(providers []string) {
 	}
 	// TODO: build this manually with block and add comments as well
 	cqBlock := gohcl.EncodeAsBlock(&config.CloudQuery{
-		PluginDirectory: ".",
+		PluginDirectory: "./cq/providers",
+		PolicyDirectory: "./cq/policies",
 		Providers:       requiredProviders,
-		Connection: config.Connection{
-			DSN: "host=localhost user=postgres password=pass DB.name=postgres port=5432",
+		Connection: &config.Connection{
+			DSN: "host=localhost user=postgres password=pass database=postgres port=5432",
 		},
 	}, "cloudquery")
 
@@ -99,4 +109,9 @@ func Initialize(providers []string) {
 	formattedData := hclwrite.Format(buffer.Bytes())
 	_ = afero.WriteFile(fs, configPath, formattedData, 0644)
 	ui.ColorizedOutput(ui.ColorSuccess, "configuration generated successfully to %s\n", configPath)
+}
+
+func init() {
+	initCmd.SetUsageTemplate(usageTemplateWithFlags)
+	rootCmd.AddCommand(initCmd)
 }

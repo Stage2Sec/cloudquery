@@ -15,7 +15,7 @@ type Config struct {
 
 func (c Config) GetProvider(name string) (*Provider, error) {
 	for _, p := range c.Providers {
-		if name == p.Name {
+		if name == p.Alias {
 			return p, nil
 		}
 	}
@@ -24,9 +24,10 @@ func (c Config) GetProvider(name string) (*Provider, error) {
 
 type CloudQuery struct {
 	PluginDirectory string              `hcl:"plugin_directory,optional"`
+	PolicyDirectory string              `hcl:"policy_directory,optional"`
 	Logger          *logging.Config     `hcl:"logging,block"`
 	Providers       []*RequiredProvider `hcl:"provider,block"`
-	Connection      Connection          `hcl:"connection,block"`
+	Connection      *Connection         `hcl:"connection,block"`
 }
 
 type Connection struct {

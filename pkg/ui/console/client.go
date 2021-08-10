@@ -5,12 +5,13 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/fatih/color"
+
 	"github.com/spf13/viper"
 
 	"github.com/cloudquery/cloudquery/pkg/client"
 	"github.com/cloudquery/cloudquery/pkg/config"
 	"github.com/cloudquery/cloudquery/pkg/ui"
-	"github.com/fatih/color"
 	"github.com/vbauerster/mpb/v6/decor"
 )
 
@@ -40,7 +41,9 @@ func CreateClientFromConfig(ctx context.Context, cfg *config.Config, opts ...cli
 		c.Providers = cfg.CloudQuery.Providers
 		c.NoVerify = viper.GetBool("no-verify")
 		c.PluginDirectory = cfg.CloudQuery.PluginDirectory
+		c.PolicyDirectory = cfg.CloudQuery.PolicyDirectory
 		c.DSN = cfg.CloudQuery.Connection.DSN
+		c.SkipBuildTables = viper.GetBool("skip-build-tables")
 	})
 	c, err := client.New(ctx, opts...)
 	if err != nil {
@@ -74,10 +77,14 @@ func (c Client) Fetch(ctx context.Context) error {
 	ui.ColorizedOutput(ui.ColorProgress, "Starting provider fetch...\n\n")
 	var fetchProgress *Progress
 	var fetchCallback client.FetchUpdateCallback
+
 	if ui.IsTerminal() {
 		fetchProgress, fetchCallback = buildFetchProgress(ctx, c.cfg.Providers)
 	}
-	request := client.FetchRequest{Providers: c.cfg.Providers, UpdateCallback: fetchCallback}
+	request := client.FetchRequest{
+		Providers:      c.cfg.Providers,
+		UpdateCallback: fetchCallback,
+	}
 	if err := c.c.Fetch(ctx, request); err != nil {
 		return err
 	}
@@ -88,20 +95,47 @@ func (c Client) Fetch(ctx context.Context) error {
 	return nil
 }
 
-func (c Client) ExecutePolicy(ctx context.Context, policyPath string, output string) error {
-	ui.ColorizedOutput(ui.ColorProgress, "Executing Policy %s...\n", policyPath)
-	_, err := c.c.ExecutePolicy(ctx, client.ExecutePolicyRequest{OutputPath: output, PolicyPath: policyPath, UpdateCallback: func(name string, passed bool, resultCount int) {
-		if passed {
-			ui.ColorizedOutput(ui.ColorInfo, "\t%s  %-140s %5s\n", emojiStatus[ui.StatusOK], name, color.GreenString("passed"))
-		} else {
-			ui.ColorizedOutput(ui.ColorInfo, "\t%s %-140s %5s\n", emojiStatus[ui.StatusError], name, color.RedString("failed"))
-		}
-	}})
+func (c Client) DownloadPolicy(ctx context.Context, args []string) error {
+	ui.ColorizedOutput(ui.ColorProgress, "Downloading CloudQuery Policy...\n\n")
+	err := c.c.DownloadPolicy(ctx, args)
 	if err != nil {
+		time.Sleep(100 * time.Millisecond)
+		ui.ColorizedOutput(ui.ColorError, "❌ Failed to Download policy: %s.\n\n", err.Error())
 		return err
 	}
-	if output != "-" {
-		ui.ColorizedOutput(ui.ColorProgress, "Policy Executed successfully\n")
+	// sleep some extra 300 milliseconds for progress refresh
+	if ui.IsTerminal() {
+		time.Sleep(300 * time.Millisecond)
+		c.updater.Wait()
+	}
+	ui.ColorizedOutput(ui.ColorProgress, "Finished downloading policy...\n\n")
+	return nil
+}
+
+func (c Client) RunPolicy(ctx context.Context, args []string, subPath, outputPath string, stopOnFailure bool, skipVersioning bool) error {
+	ui.ColorizedOutput(ui.ColorProgress, "Starting policy run...\n")
+	req := client.PolicyRunRequest{
+		Args:           args,
+		SubPath:        subPath,
+		OutputPath:     outputPath,
+		StopOnFailure:  stopOnFailure,
+		SkipVersioning: skipVersioning,
+		RunCallBack: func(name string, passed bool) {
+			if passed {
+				ui.ColorizedOutput(ui.ColorInfo, "\t%s  %-140s %5s\n", emojiStatus[ui.StatusOK], name, color.GreenString("passed"))
+			} else {
+				ui.ColorizedOutput(ui.ColorInfo, "\t%s %-140s %5s\n", emojiStatus[ui.StatusError], name, color.RedString("failed"))
+			}
+		},
+	}
+	err := c.c.RunPolicy(ctx, req)
+	if err != nil {
+		time.Sleep(100 * time.Millisecond)
+		ui.ColorizedOutput(ui.ColorError, "❌ Failed to run policy: %s.\n\n", err.Error())
+		return err
+	}
+	if outputPath != "-" {
+		ui.ColorizedOutput(ui.ColorProgress, "Finished policy run...\n\n")
 	}
 	return nil
 }
@@ -116,15 +150,19 @@ func buildFetchProgress(ctx context.Context, providers []*config.Provider) (*Pro
 	})
 
 	for _, p := range providers {
-		fetchProgress.Add(p.Name, fmt.Sprintf("cq-provider-%s@%s", p.Name, "latest"), "fetching", int64(len(p.Resources)))
+		if p.Alias != p.Name {
+			fetchProgress.Add(fmt.Sprintf("%s_%s", p.Name, p.Alias), fmt.Sprintf("cq-provider-%s@%s-%s", p.Name, "latest", p.Alias), "fetching", int64(len(p.Resources)))
+		} else {
+			fetchProgress.Add(fmt.Sprintf("%s_%s", p.Name, p.Alias), fmt.Sprintf("cq-provider-%s@%s", p.Name, "latest"), "fetching", int64(len(p.Resources)))
+		}
 	}
 	fetchCallback := func(update client.FetchUpdate) {
 		if update.Error != "" {
 			fetchProgress.Update(update.Provider, ui.StatusError, fmt.Sprintf("error: %s", update.Error), 0)
 			return
 		}
-		fetchProgress.Increment(update.Provider, 1)
 		bar := fetchProgress.GetBar(update.Provider)
+		bar.b.IncrBy(update.DoneCount() - int(bar.b.Current()))
 
 		if bar.Status == ui.StatusError {
 			if update.AllDone() {
@@ -146,7 +184,7 @@ func loadConfig(path string) (*config.Config, error) {
 	if diags != nil {
 		ui.ColorizedOutput(ui.ColorHeader, "Configuration Error Diagnostics:\n")
 		for _, d := range diags {
-			ui.ColorizedOutput(ui.ColorError, "❌ %s\n", d.Error())
+			ui.ColorizedOutput(ui.ColorError, "❌ %s; %s\n", d.Summary, d.Detail)
 		}
 		return nil, fmt.Errorf("bad configuration")
 	}

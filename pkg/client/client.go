@@ -2,24 +2,27 @@ package client
 
 import (
 	"context"
-	"fmt"
+	"encoding/json"
 	"io"
+	"os"
 	"path/filepath"
 
-	"github.com/cloudquery/cloudquery/pkg/ui"
+	"github.com/cloudquery/cq-provider-sdk/provider"
 
 	"github.com/cloudquery/cloudquery/internal/logging"
 	"github.com/cloudquery/cloudquery/pkg/config"
 	"github.com/cloudquery/cloudquery/pkg/config/convert"
 	"github.com/cloudquery/cloudquery/pkg/plugin"
 	"github.com/cloudquery/cloudquery/pkg/plugin/registry"
+	"github.com/cloudquery/cloudquery/pkg/policy"
+	"github.com/cloudquery/cloudquery/pkg/ui"
 	"github.com/cloudquery/cq-provider-sdk/cqproto"
+	"github.com/cloudquery/cq-provider-sdk/provider/schema"
 	"github.com/hashicorp/go-hclog"
 	"github.com/jackc/pgx/v4/pgxpool"
 	zerolog "github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
 	"golang.org/x/sync/errgroup"
-	"gopkg.in/yaml.v3"
 )
 
 // FetchRequest is provided to the Client to execute a fetch on one or more providers
@@ -28,24 +31,11 @@ type FetchRequest struct {
 	UpdateCallback FetchUpdateCallback
 	// Providers list of providers to call for fetching
 	Providers []*config.Provider
-}
-
-type ExecutePolicyRequest struct {
-	// Path to the policy, currently we still use the old .yml format, future versions will change to HCL
-	PolicyPath string
-	// UpdateCallback allows gets called when the client receives updates on policy execution.
-	UpdateCallback PolicyExecutionCallback
-	// if True policy execution will stop on first failure
-	StopOnFailure bool
-	// Path to save policy result
-	OutputPath string
-}
-
-type PolicyExecutionResult struct {
-	// True if all policies have passed
-	Passed bool
-	// Map of all query result sets
-	Results map[string]*PolicyResult
+	// Optional: Disable deletion of data from tables.
+	// Use this with caution, as it can create duplicates of data!
+	DisableDataDelete bool
+	// Optional: Adds extra fields to the provider, this is used for testing purposes.
+	ExtraFields map[string]interface{}
 }
 
 type FetchUpdate struct {
@@ -57,6 +47,27 @@ type FetchUpdate struct {
 	ResourceCount uint64
 	// Error if any returned by the provider
 	Error string
+}
+
+// PolicyRunRequest is the request used to run a policy.
+type PolicyRunRequest struct {
+	// Args are the given arguments from the policy run command.
+	Args []string
+
+	// SubPath is the optional sub path for sub policy/query execution only.
+	SubPath string
+
+	// OutputPath is the output path for policy execution output.
+	OutputPath string
+
+	// StopOnFailure signals policy execution to stop after first failure.
+	StopOnFailure bool
+
+	// RunCallBack is the callback method that is called after every policy execution.
+	RunCallBack policy.ExecutionCallback
+
+	// SkipVersioning if true policy will be executed without checking out the version of the policy repo using git tags
+	SkipVersioning bool
 }
 
 func (f FetchUpdate) AllDone() bool {
@@ -85,9 +96,12 @@ type FetchDoneResult struct {
 	ResourceCount string
 }
 
-type FetchUpdateCallback func(update FetchUpdate)
+// TableCreator creates tables based on schema received from providers
+type TableCreator interface {
+	CreateTable(ctx context.Context, conn *pgxpool.Conn, t *schema.Table, p *schema.Table) error
+}
 
-type PolicyExecutionCallback func(name string, passed bool, resultCount int)
+type FetchUpdateCallback func(update FetchUpdate)
 
 type Option func(options *Client)
 
@@ -99,10 +113,16 @@ type Client struct {
 	RegistryURL string
 	// Optional: Where to save downloaded providers, by default current working directory, defaults to ./cq/providers
 	PluginDirectory string
+	// Optional: Where to save downloaded policies, by default current working directory, defaults to ./cq/policy
+	PolicyDirectory string
+	// Optional: If true cloudquery just runs policy files without using git tag to select a version
+	SkipVersioning bool
 	// Optional: if this flag is true, plugins downloaded from URL won't be verified when downloaded
 	NoVerify bool
 	// Optional: DSN connection information for database client will connect to
 	DSN string
+	// Optional: Skips Building tables on fetch execution
+	SkipBuildTables bool
 	// Optional: HubProgressUpdater allows the client creator to get called back on download progress and completion.
 	HubProgressUpdater ui.Progress
 	// Optional: Logger framework can use to log.
@@ -113,6 +133,8 @@ type Client struct {
 	Hub registry.Hub
 	// manager manages all plugins lifecycle
 	Manager *plugin.Manager
+	// TableCreator defines how table are created in the database
+	TableCreator TableCreator
 	// pool is a list of connection that are used for policy/query execution
 	pool *pgxpool.Pool
 }
@@ -121,7 +143,9 @@ func New(ctx context.Context, options ...Option) (*Client, error) {
 
 	c := &Client{
 		PluginDirectory:    filepath.Join(".", ".cq", "providers"),
+		PolicyDirectory:    ".",
 		NoVerify:           false,
+		SkipBuildTables:    false,
 		HubProgressUpdater: nil,
 		RegistryURL:        registry.CloudQueryRegistryURl,
 		Logger:             logging.NewZHcLog(&zerolog.Logger, ""),
@@ -135,15 +159,21 @@ func New(ctx context.Context, options ...Option) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	poolCfg, err := pgxpool.ParseConfig(c.DSN)
-	if err != nil {
-		return nil, err
+	if c.TableCreator == nil {
+		c.TableCreator = provider.NewMigrator(c.Logger)
 	}
-	poolCfg.LazyConnect = true
-	c.pool, err = pgxpool.ConnectConfig(ctx, poolCfg)
-	if err != nil {
-		return nil, err
+	if c.DSN == "" {
+		c.Logger.Warn("missing DSN, some commands won't work")
+	} else {
+		poolCfg, err := pgxpool.ParseConfig(c.DSN)
+		if err != nil {
+			return nil, err
+		}
+		poolCfg.LazyConnect = true
+		c.pool, err = pgxpool.ConnectConfig(ctx, poolCfg)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return c, nil
 }
@@ -155,6 +185,14 @@ func (c *Client) DownloadProviders(ctx context.Context) error {
 }
 
 func (c *Client) Fetch(ctx context.Context, request FetchRequest) error {
+	if !c.SkipBuildTables {
+		for _, p := range request.Providers {
+			if err := c.BuildProviderTables(ctx, p.Name); err != nil {
+				return err
+			}
+		}
+	}
+	c.Logger.Info("received fetch request", "disable_delete", request.DisableDataDelete, "extra_fields", request.ExtraFields)
 	errGroup, gctx := errgroup.WithContext(ctx)
 	for _, providerConfig := range request.Providers {
 		providerConfig := providerConfig
@@ -178,7 +216,9 @@ func (c *Client) Fetch(ctx context.Context, request FetchRequest) error {
 				Connection: cqproto.ConnectionDetails{
 					DSN: c.DSN,
 				},
-				Config: cfg,
+				Config:        cfg,
+				DisableDelete: request.DisableDataDelete,
+				ExtraFields:   request.ExtraFields,
 			})
 			if err != nil {
 				c.Logger.Error("failed to configure provider", "error", err, "provider", providerPlugin.Name())
@@ -198,6 +238,7 @@ func (c *Client) Fetch(ctx context.Context, request FetchRequest) error {
 					return nil
 				}
 				if err != nil {
+					c.Logger.Error("received provider fetch error", "provider", providerPlugin.Name(), "version", providerPlugin.Version(), "error", err)
 					return err
 				}
 				update := FetchUpdate{
@@ -208,7 +249,8 @@ func (c *Client) Fetch(ctx context.Context, request FetchRequest) error {
 					Error:             resp.Error,
 				}
 				if resp.Error != "" {
-					c.Logger.Error("received error fetching", "provider", providerPlugin.Name(), "error", resp.Error)
+					c.Logger.Error("received provider fetch update error", "provider", providerPlugin.Name(), "version", providerPlugin.Version(), "error", resp.Error)
+					continue
 				}
 				c.Logger.Debug("fetch update", "provider", providerPlugin.Name(), "resource_count", resp.ResourceCount, "finished", update.AllDone(), "finishCount", update.DoneCount())
 				if request.UpdateCallback != nil {
@@ -231,6 +273,10 @@ func (c Client) GetProviderSchema(ctx context.Context, providerName string) (*cq
 		return nil, err
 	}
 	defer func() {
+		if providerPlugin.Version() == plugin.Unmanaged {
+			c.Logger.Warn("Not closing unmanaged provider", "provider", providerName)
+			return
+		}
 		if err := c.Manager.KillProvider(providerName); err != nil {
 			c.Logger.Warn("failed to kill provider", "provider", providerName)
 		}
@@ -245,66 +291,84 @@ func (c Client) GetProviderConfiguration(ctx context.Context, providerName strin
 		return nil, err
 	}
 	defer func() {
+		if providerPlugin.Version() == plugin.Unmanaged {
+			c.Logger.Warn("Not closing unmanaged provider", "provider", providerName)
+			return
+		}
 		if err := c.Manager.KillProvider(providerName); err != nil {
-			c.Logger.Warn("failed to kill provider", "provider", providerName)
+			c.Logger.Warn("failed to close provider", "provider", providerName)
 		}
 	}()
 	return providerPlugin.Provider().GetProviderConfig(ctx, &cqproto.GetProviderConfigRequest{})
 }
 
-func (c Client) ExecutePolicy(ctx context.Context, request ExecutePolicyRequest) (*PolicyExecutionResult, error) {
-
+func (c *Client) BuildProviderTables(ctx context.Context, providerName string) error {
+	s, err := c.GetProviderSchema(ctx, providerName)
+	if err != nil {
+		return err
+	}
 	conn, err := c.pool.Acquire(ctx)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer conn.Release()
-	data, err := afero.ReadFile(afero.NewOsFs(), request.PolicyPath)
+	for name, t := range s.ResourceTables {
+		c.Logger.Debug("creating tables for resource for provider", "resource_name", name, "provider", s.Name, "version", s.Version)
+		if err := c.TableCreator.CreateTable(ctx, conn, t, nil); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c Client) DownloadPolicy(ctx context.Context, args []string) error {
+	c.Logger.Info("Downloading policy from GitHub", "args", args)
+	m := policy.NewManager(c.PolicyDirectory, c.pool, c.Logger)
+
+	// Parse input args
+	p, err := m.ParsePolicyHubPath(args, "")
 	if err != nil {
-		return nil, err
+		return err
+	}
+	c.Logger.Debug("Parsed policy download input arguments", "policy", p)
+	return m.DownloadPolicy(ctx, p)
+}
+
+func (c Client) RunPolicy(ctx context.Context, req PolicyRunRequest) error {
+	c.Logger.Info("Running policy", "args", req.Args)
+	m := policy.NewManager(c.PolicyDirectory, c.pool, c.Logger)
+
+	// Parse input args
+	p, err := m.ParsePolicyHubPath(req.Args, req.SubPath)
+	if err != nil {
+		return err
+	}
+	c.Logger.Debug("Parsed policy run input arguments", "policy", p)
+	output, err := m.RunPolicy(ctx, &policy.ExecuteRequest{Policy: p, StopOnFailure: req.StopOnFailure, SkipVersioning: req.SkipVersioning, UpdateCallback: req.RunCallBack})
+	if err != nil {
+		return err
 	}
 
-	var policy config.Policy
-	// TODO: convert to hcl
-	if err := yaml.Unmarshal(data, &policy); err != nil {
-		return nil, err
-	}
-	// Create Views
-	c.Logger.Debug("creating policy views", "policy", request.PolicyPath)
-	if err := createViews(ctx, conn, policy.Views); err != nil {
-		return nil, fmt.Errorf("failed to create policy views %w", err)
-	}
-	exec := &PolicyExecutionResult{
-		Passed:  true,
-		Results: make(map[string]*PolicyResult, len(policy.Queries)),
-	}
-
-	for _, q := range policy.Queries {
-		result, err := executePolicyQuery(ctx, conn, q)
+	// Store output in file if requested
+	if req.OutputPath != "" {
+		fs := afero.NewOsFs()
+		f, err := fs.OpenFile(req.OutputPath, os.O_RDWR|os.O_CREATE, 0644)
 		if err != nil {
-			c.Logger.Error("failed to execute policy query", "policy", q.Name, "error", err)
-			if request.StopOnFailure {
-				return nil, fmt.Errorf("failed to execute policy query %s. Err: %w", q.Name, err)
-			}
-			if request.UpdateCallback != nil {
-				request.UpdateCallback(q.Name, false, 0)
-			}
-			continue
+			return err
 		}
-		if !result.Passed {
-			exec.Passed = false
+		defer func() {
+			_ = f.Close()
+		}()
+
+		data, err := json.Marshal(&output)
+		if err != nil {
+			return err
 		}
-		exec.Results[q.Name] = result
-		if request.UpdateCallback != nil {
-			request.UpdateCallback(q.Name, result.Passed, len(result.Data))
+		if _, err := f.Write(data); err != nil {
+			return err
 		}
 	}
-	if request.OutputPath != "" {
-		if err := createPolicyOutput(request.OutputPath, exec); err != nil {
-			return nil, fmt.Errorf("failed to create policy output %s. Err: %w", request.OutputPath, err)
-		}
-	}
-	return exec, nil
+	return nil
 }
 
 func (c Client) Close() {
