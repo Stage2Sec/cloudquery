@@ -30,10 +30,20 @@ type PolicyProvider struct {
 	Version string `hcl:"version,optional"`
 }
 
+type RiskPayload struct {
+	Criticality     string `hcl:"criticality,optional"     json:"criticality,omitempty"`
+	AttackSurface   string `hcl:"attack_surface,optional"  json:"attack_surface,omitempty"`
+	Summary         string `hcl:"summary,optional"         json:"summary,omitempty"`
+	Description     string `hcl:"description,optional"     json:"description,omitempty"`
+	Recommendations string `hcl:"recommendations,optional" json:"recommendations,omitempty"`
+	References      string `hcl:"references,optional"      json:"references,omitempty"`
+	Source          string `hcl:"source,optional"          json:"source,omitempty"`
+}
+
 type Query struct {
-	Name         string `hcl:"name,label"`
-	Description  string `hcl:"description,optional"`
-	ExpectOutput bool   `hcl:"expect_output,optional"`
-	Query        string `hcl:"query"`
-	Risk         map[string]interface{}
+	Name         string       `hcl:"name,label"`
+	Description  string       `hcl:"description,optional"`
+	ExpectOutput bool         `hcl:"expect_output,optional"`
+	Query        string       `hcl:"query"`
+	Risk         *RiskPayload `hcl:"risk,block"`
 }

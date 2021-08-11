@@ -19,12 +19,12 @@ type Executor struct {
 
 // QueryResult contains the result information from an executed query.
 type QueryResult struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	Columns     []string               `json:"result_headers"`
-	Data        [][]interface{}        `json:"result_rows"`
-	Passed      bool                   `json:"check_passed"`
-	Risk        map[string]interface{} `json:"risk"`
+	Name        string             `json:"name"`
+	Description string             `json:"description"`
+	Columns     []string           `json:"result_headers"`
+	Data        [][]interface{}    `json:"result_rows"`
+	Passed      bool               `json:"check_passed"`
+	Risk        config.RiskPayload `json:"risk"`
 }
 
 // ExecutionResult contains all policy execution results.
@@ -150,7 +150,7 @@ func (e *Executor) ExecuteQuery(ctx context.Context, q *config.Query) (*QueryRes
 		Columns:     make([]string, 0),
 		Data:        make([][]interface{}, 0),
 		Passed:      false,
-		Risk:        make(map[string]interface{}),
+		Risk:        config.RiskPayload{},
 	}
 	for _, fd := range data.FieldDescriptions() {
 		result.Columns = append(result.Columns, string(fd.Name))
@@ -169,8 +169,8 @@ func (e *Executor) ExecuteQuery(ctx context.Context, q *config.Query) (*QueryRes
 	if (len(result.Data) == 0 && !q.ExpectOutput) || (q.ExpectOutput && len(result.Data) > 0) {
 		result.Passed = true
 	}
-	if len(q.Risk) > 0 {
-		result.Risk = q.Risk
+	if q.Risk != nil {
+		result.Risk = *q.Risk
 	}
 	return result, nil
 }
