@@ -4,7 +4,7 @@ cloudquery {
 
   provider "aws" {
     source  = ""
-    version = "v0.5.4"
+    version = "v0.5.7"
   }
 
   connection {
@@ -48,9 +48,13 @@ provider "aws" {
     "cloudtrail.trails",
     "cloudwatch.alarms",
     "cloudwatchlogs.filters",
+    "cognito.identity_pools",
+    "cognito.user_pools",
     "config.configuration_recorders",
     "config.conformance_packs",
+    "directconnect.connections",
     "directconnect.gateways",
+    "directconnect.lags",
     "directconnect.virtual_gateways",
     "directconnect.virtual_interfaces",
     "ec2.byoip_cidrs",
