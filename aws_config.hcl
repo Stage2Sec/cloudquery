@@ -4,11 +4,11 @@ cloudquery {
 
   provider "aws" {
     source  = ""
-    version = "v0.5.7"
+    version = "v0.5.8"
   }
 
   connection {
-    dsn = "host=localhost user=postgres password=Cloudquery! DB.name=postgres port=5432"
+    dsn = "postgres://postgres:Cloudquery!@localhost:5432/postgres?sslmode=disable"
   }
 }
 
