@@ -31,7 +31,7 @@ provider "azure" {
     "container.managed_clusters",
     "keyvault.vaults",
     "monitor.activity_log_alerts",
-    "monitor.activity_logs",
+    # "monitor.activity_logs",
     "monitor.diagnostic_settings",
     "monitor.log_profiles",
     "mysql.servers",
