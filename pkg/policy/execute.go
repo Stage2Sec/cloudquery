@@ -23,6 +23,7 @@ type QueryResult struct {
 	Description string             `json:"description"`
 	Columns     []string           `json:"result_headers"`
 	Data        [][]interface{}    `json:"result_rows"`
+	Type        config.QueryType   `json:"type"`
 	Passed      bool               `json:"check_passed"`
 	Risk        config.RiskPayload `json:"risk"`
 }
@@ -37,7 +38,7 @@ type ExecutionResult struct {
 }
 
 // ExecutionCallback represents the format of the policy callback function.
-type ExecutionCallback func(name string, passed bool)
+type ExecutionCallback func(name string, queryType config.QueryType, passed bool)
 
 // ExecuteRequest is a request that triggers policy execution.
 type ExecuteRequest struct {
@@ -89,7 +90,7 @@ func (e *Executor) executePolicy(ctx context.Context, policy *config.Policy, exe
 	// Execute callback method
 	if execReq.UpdateCallback != nil {
 		for _, r := range results {
-			execReq.UpdateCallback(r.Description, r.Passed)
+			execReq.UpdateCallback(r.Description, r.Type, r.Passed)
 		}
 	}
 	// Skip further execution if exit on failure is defined
@@ -151,6 +152,7 @@ func (e *Executor) ExecuteQuery(ctx context.Context, q *config.Query) (*QueryRes
 		Data:        make([][]interface{}, 0),
 		Passed:      false,
 		Risk:        config.RiskPayload{},
+		Type:        q.Type,
 	}
 	for _, fd := range data.FieldDescriptions() {
 		result.Columns = append(result.Columns, string(fd.Name))
@@ -166,12 +168,10 @@ func (e *Executor) ExecuteQuery(ctx context.Context, q *config.Query) (*QueryRes
 	if data.Err() != nil {
 		return nil, data.Err()
 	}
-	if (len(result.Data) == 0 && !q.ExpectOutput) || (q.ExpectOutput && len(result.Data) > 0) {
-		result.Passed = true
-	}
 	if q.Risk != nil {
 		result.Risk = *q.Risk
 	}
+	result.Passed = (len(result.Data) == 0) == !q.ExpectOutput
 	return result, nil
 }
 
