@@ -31,7 +31,7 @@ Checkout https://hub.cloudquery.io
 
 If you want us to add a new provider or resource please open an [Issue](https://github.com/cloudquery/cloudquery/issues).
 
-See [docs](https://docs.cloudquery.io/developers/developing-new-provider) for developing new provider.
+See [docs](https://docs.cloudquery.io/docs/developers/developing-new-provider) for developing new provider.
 
 ## Download & install
 
@@ -151,6 +151,10 @@ Checkout [cloudquery/terraform-aws-cloudquery](https://github.com/cloudquery/ter
 ## License
 
 By contributing to cloudquery you agree that your contributions will be licensed as defined on the LICENSE file.
+
+## Hiring
+
+If you are into Go, Backend, Cloud, GCP, AWS - ping us at jobs [at] our domain
 
 ## Contribution
 
