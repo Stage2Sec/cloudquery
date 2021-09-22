@@ -4,7 +4,7 @@ cloudquery {
 
   provider "gcp" {
     source  = ""
-    version = "latest"
+    version = "v0.4.6"
   }
 
   connection {
@@ -41,6 +41,7 @@ provider "gcp" {
     "compute.subnetworks",
     "compute.target_https_proxies",
     "compute.target_ssl_proxies",
+    "compute.url_maps",
     "compute.vpn_gateways",
     "crm.projects",
     "dns.managed_zones",
